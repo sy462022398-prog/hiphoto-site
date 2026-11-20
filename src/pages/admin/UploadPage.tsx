@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../supabase/client';
 import { uploadMedia, removeMediaObjects, guessMediaType } from '../../lib/media-pipeline';
 import FilePreview from '../../components/FilePreview';
+import VideoCoverPicker from '../../components/VideoCoverPicker';
 import { Upload, Image, Film, Plus, X, Loader2 } from 'lucide-react';
 
 const ACTIVITY_TYPES = ['外拍', '聚会', '比赛', '讲座', '其他'];
@@ -18,6 +19,9 @@ export default function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState('');
+  // 每个视频选定的封面秒数；没选过的视频仍走自动封面
+  const [posterTimes, setPosterTimes] = useState<Map<File, number>>(new Map());
+  const [pickerIndex, setPickerIndex] = useState<number | null>(null);
 
   function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const fileList = e.target.files;
@@ -29,7 +33,14 @@ export default function UploadPage() {
 
   function removeFile(index: number) {
     if (uploading) return;
+    const removed = files[index];
     setFiles((prev) => prev.filter((_, i) => i !== index));
+    setPosterTimes((prev) => {
+      if (!prev.has(removed)) return prev;
+      const next = new Map(prev);
+      next.delete(removed);
+      return next;
+    });
   }
 
   const getMediaType = guessMediaType;
@@ -87,8 +98,12 @@ export default function UploadPage() {
 
       let result;
       try {
-        result = await uploadMedia(file, activity.id, i, (msg) =>
-          setProgress(`${i + 1}/${files.length} ${file.name} · ${msg}`),
+        result = await uploadMedia(
+          file,
+          activity.id,
+          i,
+          (msg) => setProgress(`${i + 1}/${files.length} ${file.name} · ${msg}`),
+          posterTimes.get(file),
         );
       } catch (err) {
         await abortToEdit(
@@ -265,6 +280,15 @@ export default function UploadPage() {
                       )}
                     </span>
                   </div>
+                  {getMediaType(file) === 'video' && (
+                    <button
+                      type="button"
+                      onClick={() => { if (!uploading) setPickerIndex(i); }}
+                      className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/60 text-xs text-gray-300 hover:bg-amber-500 hover:text-gray-900 transition"
+                    >
+                      {posterTimes.has(file) ? `封面 ${posterTimes.get(file)!.toFixed(1)}s` : '选封面'}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -289,6 +313,18 @@ export default function UploadPage() {
           )}
         </button>
       </form>
+
+      {pickerIndex !== null && files[pickerIndex] && (
+        <VideoCoverPicker
+          file={files[pickerIndex]}
+          value={posterTimes.get(files[pickerIndex])}
+          onChange={(t) => {
+            const f = files[pickerIndex];
+            setPosterTimes((prev) => new Map(prev).set(f, t));
+          }}
+          onClose={() => setPickerIndex(null)}
+        />
+      )}
     </div>
   );
 }
