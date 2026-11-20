@@ -4,6 +4,7 @@ import { supabase } from '../../supabase/client';
 import { uploadMedia, removeMediaObjects, guessMediaType } from '../../lib/media-pipeline';
 import { photoThumb } from '../../lib/media-urls';
 import FilePreview from '../../components/FilePreview';
+import VideoCoverPicker from '../../components/VideoCoverPicker';
 import type { Tables } from '../../supabase/types';
 import {
   ArrowLeft, Save, Upload, Trash2, Image, Film, Loader2, X,
@@ -33,6 +34,9 @@ export default function ActivityEditPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
+  // 每个视频选定的封面秒数；没选过的视频仍走自动封面
+  const [posterTimes, setPosterTimes] = useState<Map<File, number>>(new Map());
+  const [pickerIndex, setPickerIndex] = useState<number | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -114,7 +118,13 @@ export default function ActivityEditPage() {
     // 中途失败时把已成功的文件从待传列表里去掉，
     // 否则再点一次"开始上传"会把它们重传一遍，产生重复作品。
     const stop = (reason: string) => {
+      const uploadedFiles = newFiles.slice(0, done);
       setNewFiles((prev) => prev.slice(done));
+      setPosterTimes((prev) => {
+        const next = new Map(prev);
+        for (const f of uploadedFiles) next.delete(f);
+        return next;
+      });
       alert(`${reason}\n\n已成功上传 ${done} 个，未上传的文件仍留在列表里，可处理后继续。`);
       setUploading(false);
       setUploadProgress('');
@@ -126,8 +136,12 @@ export default function ActivityEditPage() {
 
       let result;
       try {
-        result = await uploadMedia(file, id, i, (msg) =>
-          setUploadProgress(`${i + 1}/${newFiles.length} ${file.name} · ${msg}`),
+        result = await uploadMedia(
+          file,
+          id,
+          i,
+          (msg) => setUploadProgress(`${i + 1}/${newFiles.length} ${file.name} · ${msg}`),
+          posterTimes.get(file),
         );
       } catch (err) {
         stop(`第 ${i + 1} 个文件「${file.name}」上传失败：${err instanceof Error ? err.message : String(err)}`);
@@ -173,6 +187,7 @@ export default function ActivityEditPage() {
 
     if (notes.length) alert('已上传，但有提示：\n' + notes.join('\n'));
     setNewFiles([]);
+    setPosterTimes(new Map());
     setUploading(false);
     setUploadProgress('');
   }
@@ -315,7 +330,7 @@ export default function ActivityEditPage() {
               <span className="text-sm text-gray-400">待上传: {newFiles.length} 个文件</span>
               <div className="flex gap-2">
                 <button
-                  onClick={() => { if (!uploading) setNewFiles([]); }}
+                  onClick={() => { if (!uploading) { setNewFiles([]); setPosterTimes(new Map()); } }}
                   disabled={uploading}
                   className="text-sm text-gray-500 hover:text-gray-300 transition disabled:opacity-40"
                 >
@@ -350,11 +365,25 @@ export default function ActivityEditPage() {
                       e.stopPropagation();
                       if (uploading) return;
                       setNewFiles((prev) => prev.filter((_, idx) => idx !== i));
+                      setPosterTimes((prev) => {
+                        if (!prev.has(file)) return prev;
+                        const next = new Map(prev);
+                        next.delete(file);
+                        return next;
+                      });
                     }}
                     className="absolute top-0.5 right-0.5 w-5 h-5 bg-black/70 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
                   >
                     <X className="w-3 h-3 text-white" />
                   </button>
+                  {getMediaType(file) === 'video' && (
+                    <button
+                      onClick={() => { if (!uploading) setPickerIndex(i); }}
+                      className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/60 text-xs text-gray-300 hover:bg-amber-500 hover:text-gray-900 transition"
+                    >
+                      {posterTimes.has(file) ? `封面 ${posterTimes.get(file)!.toFixed(1)}s` : '选封面'}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -418,6 +447,18 @@ export default function ActivityEditPage() {
           </div>
         )}
       </div>
+
+      {pickerIndex !== null && newFiles[pickerIndex] && (
+        <VideoCoverPicker
+          file={newFiles[pickerIndex]}
+          value={posterTimes.get(newFiles[pickerIndex])}
+          onChange={(t) => {
+            const f = newFiles[pickerIndex];
+            setPosterTimes((prev) => new Map(prev).set(f, t));
+          }}
+          onClose={() => setPickerIndex(null)}
+        />
+      )}
     </div>
   );
 }
