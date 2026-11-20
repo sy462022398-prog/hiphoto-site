@@ -525,10 +525,12 @@ function waitEvent(el: HTMLVideoElement, ok: string, timeout = 15000): Promise<v
 /** 从视频抽一帧做封面；timeSec 指定第几秒，不传则沿用默认（第 1 秒或时长一半） */
 async function makeVideoPoster(file: File, timeSec?: number): Promise<Blob | null> {
   const url = URL.createObjectURL(file);
-  const v = document.createElement('video');
+  const v = document.createElement('video') as VFCVideo;
   v.muted = true;
   v.playsInline = true;
-  v.preload = 'metadata';
+  // 必须 auto：metadata 模式下浏览器拿不到完整的可跳转范围，
+  // 跳到较后的时间点会失败或取到未解码的黑帧。
+  v.preload = 'auto';
   v.src = url;
   try {
     await waitEvent(v, 'loadedmetadata');
@@ -537,14 +539,71 @@ async function makeVideoPoster(file: File, timeSec?: number): Promise<Blob | nul
       typeof timeSec === 'number' && Number.isFinite(timeSec)
         ? Math.max(0, Math.min(timeSec, Math.max(0, duration - 0.05)))
         : Math.min(1, duration / 2);
-    const seeked = waitEvent(v, 'seeked');
-    v.currentTime = target;
-    await seeked;
+
+    // 1) 先尝试直接跳转，并确认确实停在了目标时间附近
+    let landed = false;
+    try {
+      for (let i = 0; i < 2; i++) {
+        const seeked = waitEvent(v, 'seeked', 8000);
+        v.currentTime = target;
+        await seeked;
+        if (Math.abs(v.currentTime - target) < 0.3) {
+          landed = true;
+          break;
+        }
+      }
+    } catch {
+      /* 跳转失败就走播放兜底 */
+    }
+
+    // 2) 跳转失败（部分文件可跳转范围损坏）→ 从头播放到目标时间再停
+    if (!landed) {
+      v.currentTime = 0;
+      await v.play();
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(
+          () => reject(new Error('播放定位超时')),
+          (target + 15) * 1000,
+        );
+        const check = () => {
+          if (v.currentTime >= target - 0.05 || v.ended) {
+            clearTimeout(timer);
+            resolve();
+          } else {
+            window.setTimeout(check, 50);
+          }
+        };
+        check();
+      });
+      v.pause();
+    }
+
+    // 3) seeked/暂停触发时画面未必已解码呈现，立刻 drawImage 会取到黑帧；
+    //    等一帧真正呈现后再画（requestVideoFrameCallback 不可用时用延时兜底）。
+    await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          resolve();
+        }
+      };
+      if (typeof v.requestVideoFrameCallback === 'function') {
+        v.requestVideoFrameCallback(() => finish());
+      }
+      window.setTimeout(finish, 800);
+    });
+
     if (!v.videoWidth || !v.videoHeight) return null;
     return await renderWebp(v, v.videoWidth, v.videoHeight, 640, 0.75);
   } catch {
     return null;
   } finally {
+    try {
+      v.pause();
+    } catch {
+      /* ignore */
+    }
     v.removeAttribute('src');
     v.load();
     URL.revokeObjectURL(url);
