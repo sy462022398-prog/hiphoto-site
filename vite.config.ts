@@ -17,6 +17,7 @@ export default defineConfig(({ mode }) => {
   const proxyTarget = env.MEOO_PROXY_TARGET;
 
   return {
+    base: '/hiphoto-site/'
     plugins: [react()],
     server: {
       host: '0.0.0.0',
