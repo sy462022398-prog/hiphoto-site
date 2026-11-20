@@ -522,8 +522,8 @@ function waitEvent(el: HTMLVideoElement, ok: string, timeout = 15000): Promise<v
   });
 }
 
-/** 从视频抽一帧做封面 */
-async function makeVideoPoster(file: File): Promise<Blob | null> {
+/** 从视频抽一帧做封面；timeSec 指定第几秒，不传则沿用默认（第 1 秒或时长一半） */
+async function makeVideoPoster(file: File, timeSec?: number): Promise<Blob | null> {
   const url = URL.createObjectURL(file);
   const v = document.createElement('video');
   v.muted = true;
@@ -532,7 +532,11 @@ async function makeVideoPoster(file: File): Promise<Blob | null> {
   v.src = url;
   try {
     await waitEvent(v, 'loadedmetadata');
-    const target = Math.min(1, (v.duration || 2) / 2);
+    const duration = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : 2;
+    const target =
+      typeof timeSec === 'number' && Number.isFinite(timeSec)
+        ? Math.max(0, Math.min(timeSec, Math.max(0, duration - 0.05)))
+        : Math.min(1, duration / 2);
     const seeked = waitEvent(v, 'seeked');
     v.currentTime = target;
     await seeked;
@@ -556,13 +560,14 @@ export async function uploadVideo(
   activityId: string,
   index: number,
   onProgress?: (msg: string) => void,
+  posterTime?: number,
 ): Promise<UploadResult> {
   const ext = (file.name.split('.').pop() || 'mp4').toLowerCase();
   const base = `${activityId}/${Date.now()}-${index}`;
   const key = `${base}.${ext}`;
 
   onProgress?.('生成视频封面…');
-  const poster = await makeVideoPoster(file);
+  const poster = await makeVideoPoster(file, posterTime);
   let thumbnailUrl: string | undefined;
   let note: string | undefined;
   const variants: string[] = [];
@@ -618,10 +623,11 @@ export async function uploadMedia(
   activityId: string,
   index: number,
   onProgress?: (msg: string) => void,
+  posterTime?: number,
 ): Promise<UploadResult & { mediaType: 'image' | 'video' }> {
   const isVideo = guessMediaType(file) === 'video';
   const r = isVideo
-    ? await uploadVideo(file, activityId, index, onProgress)
+    ? await uploadVideo(file, activityId, index, onProgress, posterTime)
     : await uploadImage(file, activityId, index, onProgress);
   return { ...r, mediaType: isVideo ? 'video' : 'image' };
 }
